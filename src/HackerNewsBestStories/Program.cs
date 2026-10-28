@@ -50,6 +50,14 @@ builder.Services.AddSingleton<BestStoriesCache>();
 builder.Services.AddHostedService<BestStoriesRefreshService>();
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
+
+// Browser clients on other origins (the Blazor client) must be listed in Cors:AllowedOrigins.
+// The custom headers are exposed so the client can show the snapshot age and retry delay.
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy
+    .WithOrigins(allowedOrigins)
+    .WithMethods(HttpMethods.Get)
+    .WithExposedHeaders("X-Snapshot-Age", "Retry-After")));
 // The web defaults also accept numbers written as strings, which shows up in the OpenAPI schema as
 // "integer | string". This API only ever writes numbers, so keep the schema exact.
 builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.NumberHandling = JsonNumberHandling.Strict);
@@ -58,6 +66,7 @@ var app = builder.Build();
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+app.UseCors();
 
 if (app.Services.GetRequiredService<IOptions<ApiOptions>>().Value.EnableSwagger)
 {

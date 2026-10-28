@@ -1,0 +1,93 @@
+@implements IDisposable
+@inject TimeProvider TimeProvider
+
+<div class="mb-4">
+    <MudStack Row="true" Justify="Justify.SpaceBetween" Class="mb-1">
+        <MudText Typo="Typo.body2">@Label</MudText>
+        <MudText Typo="Typo.body2" Color="Color.Secondary">@_remainingSeconds / @IntervalSeconds</MudText>
+    </MudStack>
+    <MudProgressLinear Value="_remainingSeconds"
+                       Min="0"
+                       Max="IntervalSeconds"
+                       Indeterminate="_waiting && AutoReload"
+                       Color="Color.Primary"
+                       Rounded="true"
+                       Size="Size.Medium" />
+</div>
+
+@code {
+    private PeriodicTimer? _timer;
+    private int _remainingSeconds;
+    private bool _waiting;
+    private DateTimeOffset _nextPoll;
+
+    // When the snapshot being shown was published, measured on this client's clock.
+    [Parameter, EditorRequired]
+    public DateTimeOffset SnapshotTime { get; set; }
+
+    [Parameter, EditorRequired]
+    public int IntervalSeconds { get; set; }
+
+    [Parameter, EditorRequired]
+    public int PollSeconds { get; set; }
+
+    // When false the countdown still runs, but reaching zero only tells the user that new data should be available.
+    [Parameter]
+    public bool AutoReload { get; set; }
+
+    // Raised (only with AutoReload) when the countdown reaches zero, and every PollSeconds after that
+    // until SnapshotTime moves forward.
+    [Parameter]
+    public EventCallback Elapsed { get; set; }
+
+    private string Label => (_waiting, AutoReload) switch
+    {
+        (false, _) => $"Next refresh in {_remainingSeconds} s",
+        (true, true) => "Waiting for the server to refresh…",
+        (true, false) => "New stories should be available. Press Show stories to load them.",
+    };
+
+    protected override void OnInitialized()
+    {
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(1), TimeProvider);
+        _ = RunAsync(_timer);
+    }
+
+    protected override void OnParametersSet() => Update();
+
+    private async Task RunAsync(PeriodicTimer timer)
+    {
+        // Disposing the timer makes WaitForNextTickAsync return false, which ends the loop.
+        while (await timer.WaitForNextTickAsync())
+        {
+            await InvokeAsync(async () =>
+            {
+                Update();
+                var now = TimeProvider.GetUtcNow();
+                if (_waiting && AutoReload && now >= _nextPoll)
+                {
+                    _nextPoll = now.AddSeconds(PollSeconds);
+                    await Elapsed.InvokeAsync();
+                }
+                StateHasChanged();
+            });
+        }
+    }
+
+    // The remaining time is recomputed from the snapshot time on every tick rather than decremented,
+    // so a delayed tick (a busy browser tab) doesn't make the countdown drift.
+    private void Update()
+    {
+        var remaining = SnapshotTime.AddSeconds(IntervalSeconds) - TimeProvider.GetUtcNow();
+        _remainingSeconds = Math.Clamp((int)Math.Ceiling(remaining.TotalSeconds), 0, IntervalSeconds);
+        var waiting = _remainingSeconds == 0;
+        if (waiting && !_waiting)
+        {
+            // Just reached zero: reload on this tick.
+            _nextPoll = DateTimeOffset.MinValue;
+        }
+        _waiting = waiting;
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}

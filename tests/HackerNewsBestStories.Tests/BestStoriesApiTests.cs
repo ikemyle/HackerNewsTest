@@ -141,6 +141,31 @@ public sealed class BestStoriesApiTests : IDisposable
         Assert.Equal(upstreamCallsAfterRefresh, _upstream.RequestCount);
     }
 
+    [Fact]
+    public async Task Allows_the_configured_client_origin_and_exposes_the_custom_headers()
+    {
+        await RefreshAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/stories/best?n=1");
+        request.Headers.Add("Origin", "http://localhost:5200");
+
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal("http://localhost:5200", Assert.Single(response.Headers.GetValues("Access-Control-Allow-Origin")));
+        Assert.Contains("X-Snapshot-Age", response.Headers.GetValues("Access-Control-Expose-Headers").Single());
+    }
+
+    [Fact]
+    public async Task Does_not_allow_other_origins()
+    {
+        await RefreshAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/stories/best?n=1");
+        request.Headers.Add("Origin", "https://example.com");
+
+        var response = await _client.SendAsync(request);
+
+        Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
+    }
+
     private Task RefreshAsync() =>
         _factory.Services.GetRequiredService<BestStoriesCache>().RefreshAsync(CancellationToken.None);
 

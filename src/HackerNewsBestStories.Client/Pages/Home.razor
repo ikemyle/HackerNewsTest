@@ -1,0 +1,118 @@
+﻿@page "/"
+@inject BestStoriesApiClient Api
+@inject ApiSettings Settings
+@inject TimeProvider TimeProvider
+
+<PageTitle>Hacker News best stories</PageTitle>
+
+<MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
+    <form @onsubmit="LoadAsync">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3">
+            <MudNumericField @bind-Value="_count"
+                             Label="Number of stories"
+                             Min="1"
+                             Max="Settings.MaxStories"
+                             HelperText="@($"1 to {Settings.MaxStories}")"
+                             Variant="Variant.Outlined"
+                             Style="max-width: 220px" />
+            <MudButton ButtonType="ButtonType.Submit"
+                       Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       Disabled="_loading">
+                Show stories
+            </MudButton>
+            <MudCheckBox @bind-Value="_autoReload" Label="Auto reload" Color="Color.Primary" />
+            @if (_loading)
+            {
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+            }
+        </MudStack>
+    </form>
+</MudPaper>
+
+@if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+
+@if (_snapshotTime is { } snapshotTime)
+{
+    <RefreshCountdown SnapshotTime="snapshotTime"
+                      IntervalSeconds="Settings.RefreshIntervalSeconds"
+                      PollSeconds="Settings.RefreshPollSeconds"
+                      AutoReload="_autoReload"
+                      Elapsed="LoadAsync" />
+}
+
+@if (_rows is not null)
+{
+    <MudText Typo="Typo.body2" Class="mb-2">
+        @_rows.Count @(_rows.Count == 1 ? "story" : "stories")
+    </MudText>
+
+    <MudTable Items="_rows" Dense="true" Hover="true" Striped="true">
+        <HeaderContent>
+            <MudTh>#</MudTh>
+            <MudTh>Title</MudTh>
+            <MudTh>By</MudTh>
+            <MudTh>Posted (UTC)</MudTh>
+            <MudTh Style="text-align: right">Score</MudTh>
+            <MudTh Style="text-align: right">Comments</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="#">@context.Rank</MudTd>
+            <MudTd DataLabel="Title">
+                <MudLink Href="@context.Story.Uri" Target="_blank" rel="noopener">@context.Story.Title</MudLink>
+            </MudTd>
+            <MudTd DataLabel="By">@context.Story.PostedBy</MudTd>
+            <MudTd DataLabel="Posted (UTC)">@context.Story.Time.UtcDateTime.ToString("yyyy-MM-dd HH:mm")</MudTd>
+            <MudTd DataLabel="Score" Style="text-align: right">@context.Story.Score</MudTd>
+            <MudTd DataLabel="Comments" Style="text-align: right">@context.Story.CommentCount</MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private int _count;
+    private bool _loading;
+    private bool _autoReload;
+    private string? _error;
+    private DateTimeOffset? _snapshotTime;
+    private IReadOnlyList<(int Rank, Story Story)>? _rows;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _count = Settings.DefaultStoryCount;
+        _autoReload = Settings.AutoReloadByDefault;
+        await LoadAsync();
+    }
+
+    // Called by the button, and by the countdown when Auto reload is checked. On failure the previous
+    // stories stay on screen with the error above them, and the countdown keeps polling.
+    private async Task LoadAsync()
+    {
+        if (_loading)
+        {
+            return;
+        }
+
+        _loading = true;
+        try
+        {
+            var result = await Api.GetBestStoriesAsync(_count);
+            _error = result.Error;
+            if (result.Error is null)
+            {
+                _rows = result.Stories.Select((story, index) => (index + 1, story)).ToList();
+                if (result.SnapshotAgeSeconds is { } age)
+                {
+                    _snapshotTime = TimeProvider.GetUtcNow().AddSeconds(-age);
+                }
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+}

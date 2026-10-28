@@ -31,7 +31,8 @@ GET /api/stories/best?n=10
 dotnet run --project src/HackerNewsBestStories
 ```
 
-The API listens on `http://localhost:5131`. The first refresh starts immediately and usually takes a few seconds;
+The API listens on `http://localhost:5131`, and `dotnet run` (or F5 in Visual Studio) opens the browser at
+`/swagger`. The client opens at `http://localhost:5200` the same way. The first refresh starts immediately and usually takes a few seconds;
 until it finishes the endpoint returns 503.
 
 ```bash
@@ -56,6 +57,64 @@ docker run --rm -p 8080:8080 hacker-news-best-stories
 curl -i "http://localhost:8080/api/stories/best?n=5"
 ```
 
+## Client page
+
+`src/HackerNewsBestStories.Client` is a separate Blazor WebAssembly app built with MudBlazor. It has a number
+input for how many stories to show, loads the default count on start, and lists the stories in a table with rank,
+linked title, author, posting time (UTC), score and comment count. API errors are shown as they come back: the
+validation message for a bad `n`, the "not ready yet" message with the retry delay on a 503, and a plain message
+if the API can't be reached.
+
+Run the API and the client in two terminals:
+
+```bash
+dotnet run --project src/HackerNewsBestStories
+```
+
+```bash
+dotnet run --project src/HackerNewsBestStories.Client
+```
+
+Then open `http://localhost:5200`.
+
+Above the table a bar counts down from 60 to 0: the time until the server's next cache refresh, worked out from
+`X-Snapshot-Age`. What happens at zero depends on the "Auto reload" checkbox next to the button, which is off
+by default:
+
+- Off: the page doesn't call the API again on its own. The bar stays at zero with a hint to press Show stories.
+  Pressing it loads the new snapshot and the bar starts again from 60.
+- On: the page reloads the stories at zero and the bar starts again from 60. The server's refresh takes a few
+  seconds, so the first reload often still gets the old snapshot. In that case the bar shows "Waiting for the
+  server to refresh…" and the page checks again every 5 seconds until a newer snapshot arrives. Ticking the box
+  while the bar is already at zero reloads on the next second.
+
+The
+countdown is recomputed from the snapshot time on every tick, so a slow or backgrounded tab doesn't make it
+drift. If a reload fails, the previous stories stay on screen with the error above them.
+
+The client's settings are in `src/HackerNewsBestStories.Client/wwwroot/appsettings.json`:
+
+| Setting | Value | Meaning |
+| --- | --- | --- |
+| `Api:BaseAddress` | `http://localhost:5131/` | The API's URL |
+| `Api:DefaultStoryCount` | `10` | Stories loaded when the page opens |
+| `Api:MaxStories` | `500` | Upper bound of the input; the API still validates `n` against its own `Api:MaxStories` |
+| `Api:RefreshIntervalSeconds` | `60` | Length of the countdown; should match the API's `HackerNews:RefreshInterval` |
+| `Api:RefreshPollSeconds` | `5` | With auto reload, how often to check again after zero until the server has a newer snapshot |
+| `Api:AutoReloadByDefault` | `false` | Initial state of the "Auto reload" checkbox |
+
+`RefreshIntervalSeconds` is a copy of the server setting. If the two differ the page still shows correct data,
+but the countdown reaches zero at the wrong time and spends the difference polling. Having the API send its
+interval in a response header would remove the duplication.
+
+Because the client runs on a different origin, the API allows it through CORS. Origins are listed in the API's
+`Cors:AllowedOrigins` (`http://localhost:5200` as shipped), and the `X-Snapshot-Age` and `Retry-After` headers
+are exposed so the page can read them. Deploying the client somewhere else means adding its origin there and
+pointing the client's `Api:BaseAddress` at the deployed API.
+
+The client has its own copy of the `Story` record rather than a shared contracts project. It is six fields, and
+the API's JSON contract is what both sides actually depend on.
+
 ## Swagger
 
 With `Api:EnableSwagger` on (the shipped setting), Swagger UI is at `http://localhost:5131/swagger` and the
@@ -70,6 +129,9 @@ Set `Api__EnableSwagger=false` to turn both off, for example in a production dep
 its schema.
 
 ## Tests
+
+There are two test projects. `HackerNewsBestStories.Tests` covers the API. `HackerNewsBestStories.Client.Tests`
+uses bUnit to render the client page against a stubbed `HttpClient`.
 
 ```bash
 dotnet test
@@ -126,6 +188,7 @@ a command-line argument (`--HackerNews:RefreshInterval=00:02:00`).
 | `Api:MaxStories` | `500` | Largest accepted `n` |
 | `Api:ColdStartRetryAfter` | `00:00:10` | `Retry-After` sent with the 503 before the first snapshot |
 | `Api:EnableSwagger` | `true` | Serve the OpenAPI document and Swagger UI |
+| `Cors:AllowedOrigins` | `["http://localhost:5200"]` | Browser origins allowed to call the API (the Blazor client) |
 | `HackerNews:BaseAddress` | `https://hacker-news.firebaseio.com/v0/` | Upstream API root |
 | `HackerNews:BestStoriesPath` | `beststories.json` | Best-story id list, relative to `BaseAddress` |
 | `HackerNews:ItemPathTemplate` | `item/{id}.json` | Single item, relative to `BaseAddress` |

@@ -11,3 +11,4 @@ tests/
 Dockerfile
 .dockerignore
 README.md
+src/HackerNewsBestStories.Client/
