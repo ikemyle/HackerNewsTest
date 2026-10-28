@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
@@ -10,11 +11,11 @@ public sealed class BestStoriesCache(
     IHttpClientFactory httpClientFactory,
     IDistributedCache sharedCache,
     IOptions<HackerNewsOptions> options,
+    IOptions<SharedCacheOptions> sharedCacheOptions,
     TimeProvider timeProvider,
     ILogger<BestStoriesCache> logger)
 {
     public const string HttpClientName = "HackerNews";
-    public const string SharedCacheKey = "hacker-news:best-stories";
 
     // Serializes refreshes and shared-cache loads so an older shared snapshot can never overwrite a newer local one.
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
@@ -64,7 +65,7 @@ public sealed class BestStoriesCache(
             StorySnapshot? shared;
             try
             {
-                var bytes = await sharedCache.GetAsync(SharedCacheKey, cancellationToken);
+                var bytes = await sharedCache.GetAsync(sharedCacheOptions.Value.SnapshotKey, cancellationToken);
                 shared = bytes is null ? null : JsonSerializer.Deserialize<StorySnapshot>(bytes, JsonSerializerOptions.Web);
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -91,7 +92,7 @@ public sealed class BestStoriesCache(
         {
             // No expiry: like the local copy, the last good snapshot is better than nothing during an outage.
             var bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonSerializerOptions.Web);
-            await sharedCache.SetAsync(SharedCacheKey, bytes, cancellationToken);
+            await sharedCache.SetAsync(sharedCacheOptions.Value.SnapshotKey, bytes, cancellationToken);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
@@ -104,7 +105,7 @@ public sealed class BestStoriesCache(
     {
         var client = httpClientFactory.CreateClient(HttpClientName);
 
-        var ids = await client.GetFromJsonAsync<int[]>("beststories.json", cancellationToken)
+        var ids = await client.GetFromJsonAsync<int[]>(settings.BestStoriesPath, cancellationToken)
             ?? throw new InvalidDataException("Hacker News returned null for the best-story list.");
 
         // The list is not guaranteed to be ordered by score, so every item is fetched before ranking.
@@ -118,7 +119,7 @@ public sealed class BestStoriesCache(
         };
         await Parallel.ForEachAsync(ids.Distinct(), parallelOptions, async (id, token) =>
         {
-            var item = await client.GetFromJsonAsync<HackerNewsItem>($"item/{id}.json", token);
+            var item = await client.GetFromJsonAsync<HackerNewsItem>(ExpandTemplate(settings.ItemPathTemplate, id), token);
             if (item is { Type: "story", Deleted: false, Dead: false, Title: not null })
             {
                 stories.Add(item);
@@ -130,7 +131,7 @@ public sealed class BestStoriesCache(
             .ThenBy(item => item.Id)
             .Select(item => new Story(
                 item.Title!,
-                string.IsNullOrEmpty(item.Url) ? $"https://news.ycombinator.com/item?id={item.Id}" : item.Url,
+                string.IsNullOrEmpty(item.Url) ? ExpandTemplate(settings.DiscussionUrlTemplate, item.Id) : item.Url,
                 item.By,
                 DateTimeOffset.FromUnixTimeSeconds(item.Time),
                 item.Score,
@@ -139,4 +140,7 @@ public sealed class BestStoriesCache(
 
         return new StorySnapshot(ranked, timeProvider.GetUtcNow());
     }
+
+    private static string ExpandTemplate(string template, int id) =>
+        template.Replace("{id}", id.ToString(CultureInfo.InvariantCulture));
 }

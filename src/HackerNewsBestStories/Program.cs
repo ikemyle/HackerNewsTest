@@ -2,19 +2,19 @@ using System.Globalization;
 using HackerNewsBestStories;
 using Microsoft.Extensions.Options;
 
-const int MaxStories = 500;
-
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOptions<HackerNewsOptions>()
-    .Bind(builder.Configuration.GetSection(HackerNewsOptions.SectionName))
-    .Validate(
-        options => options.RefreshInterval > TimeSpan.Zero
-            && options.FailureRetryDelay > TimeSpan.Zero
-            && options.RequestTimeout > TimeSpan.Zero
-            && options.RefreshTimeout > TimeSpan.Zero
-            && options.MaxConcurrentRequests > 0,
-        "HackerNews timeouts and intervals must be positive and MaxConcurrentRequests at least 1.")
+    .BindConfiguration(HackerNewsOptions.SectionName)
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+builder.Services.AddOptions<ApiOptions>()
+    .BindConfiguration(ApiOptions.SectionName)
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+builder.Services.AddOptions<SharedCacheOptions>()
+    .BindConfiguration(SharedCacheOptions.SectionName)
+    .ValidateDataAnnotations()
     .ValidateOnStart();
 
 builder.Services.AddHttpClient(BestStoriesCache.HttpClientName, (services, client) =>
@@ -26,20 +26,21 @@ builder.Services.AddHttpClient(BestStoriesCache.HttpClientName, (services, clien
 
 // The shared cache holds the latest snapshot so instances can reuse each other's refreshes.
 // "Memory" keeps it in-process (one instance); "Redis" shares it between instances.
-var cacheProvider = builder.Configuration["Cache:Provider"] ?? "Memory";
-if (cacheProvider.Equals("Memory", StringComparison.OrdinalIgnoreCase))
+// The provider decides which services to register, so it is read here rather than through IOptions.
+var cacheProvider = builder.Configuration.GetSection(SharedCacheOptions.SectionName).Get<SharedCacheOptions>()?.Provider
+    ?? throw new InvalidOperationException("Cache:Provider is not set. Use Memory or Redis.");
+switch (cacheProvider)
 {
-    builder.Services.AddDistributedMemoryCache();
-}
-else if (cacheProvider.Equals("Redis", StringComparison.OrdinalIgnoreCase))
-{
-    var redisConnectionString = builder.Configuration.GetConnectionString("Redis")
-        ?? throw new InvalidOperationException("Cache:Provider is Redis but ConnectionStrings:Redis is not set.");
-    builder.Services.AddStackExchangeRedisCache(options => options.Configuration = redisConnectionString);
-}
-else
-{
-    throw new InvalidOperationException($"Unknown Cache:Provider '{cacheProvider}'. Use Memory or Redis.");
+    case CacheProvider.Memory:
+        builder.Services.AddDistributedMemoryCache();
+        break;
+    case CacheProvider.Redis:
+        var redisConnectionString = builder.Configuration.GetConnectionString("Redis")
+            ?? throw new InvalidOperationException("Cache:Provider is Redis but ConnectionStrings:Redis is not set.");
+        builder.Services.AddStackExchangeRedisCache(options => options.Configuration = redisConnectionString);
+        break;
+    default:
+        throw new InvalidOperationException($"Unknown Cache:Provider '{cacheProvider}'. Use Memory or Redis.");
 }
 
 builder.Services.AddSingleton(TimeProvider.System);
@@ -52,28 +53,34 @@ var app = builder.Build();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 
-app.MapGet("/api/stories/best", (string? n, BestStoriesCache cache, TimeProvider timeProvider, HttpResponse response) =>
+app.MapGet("/api/stories/best", (
+    string? n,
+    BestStoriesCache cache,
+    IOptions<ApiOptions> apiOptions,
+    TimeProvider timeProvider,
+    HttpResponse response) =>
 {
+    var settings = apiOptions.Value;
     if (string.IsNullOrEmpty(n))
     {
         return Results.ValidationProblem(new Dictionary<string, string[]>
         {
-            ["n"] = [$"The n query parameter is required and must be an integer between 1 and {MaxStories}."],
+            ["n"] = [$"The n query parameter is required and must be an integer between 1 and {settings.MaxStories}."],
         });
     }
 
-    if (!int.TryParse(n, NumberStyles.None, CultureInfo.InvariantCulture, out var count) || count is < 1 or > MaxStories)
+    if (!int.TryParse(n, NumberStyles.None, CultureInfo.InvariantCulture, out var count) || count < 1 || count > settings.MaxStories)
     {
         return Results.ValidationProblem(new Dictionary<string, string[]>
         {
-            ["n"] = [$"'{n}' is not valid; n must be an integer between 1 and {MaxStories}."],
+            ["n"] = [$"'{n}' is not valid; n must be an integer between 1 and {settings.MaxStories}."],
         });
     }
 
     var snapshot = cache.Current;
     if (snapshot is null)
     {
-        response.Headers.RetryAfter = "10";
+        response.Headers.RetryAfter = ((long)settings.ColdStartRetryAfter.TotalSeconds).ToString(CultureInfo.InvariantCulture);
         return Results.Problem(
             statusCode: StatusCodes.Status503ServiceUnavailable,
             title: "Best stories are not available yet.",

@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.StackExchangeRedis;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace HackerNewsBestStories.Tests;
 
@@ -30,12 +31,31 @@ public class CacheProviderTests
         Assert.Contains("Memcached", error.Message);
     }
 
-    private static WebApplicationFactory<Program> CreateFactory(string? provider) =>
+    [Theory]
+    [InlineData("HackerNews:BestStoriesPath", "")]
+    [InlineData("HackerNews:ItemPathTemplate", "item.json")]
+    [InlineData("HackerNews:MaxConcurrentRequests", "0")]
+    [InlineData("HackerNews:RefreshInterval", "00:00:00")]
+    [InlineData("Api:MaxStories", "0")]
+    [InlineData("Cache:SnapshotKey", "")]
+    public void Rejects_missing_or_invalid_settings_at_startup(string key, string value)
+    {
+        using var factory = CreateFactory(null, (key, value));
+
+        var error = Assert.Throws<OptionsValidationException>(() => factory.Services);
+        Assert.Contains(key.Split(':')[1], error.Message);
+    }
+
+    private static WebApplicationFactory<Program> CreateFactory(string? provider, (string Key, string Value)? setting = null) =>
         new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             if (provider is not null)
             {
                 builder.UseSetting("Cache:Provider", provider);
+            }
+            if (setting is var (key, value))
+            {
+                builder.UseSetting(key, value);
             }
             builder.UseSetting("ConnectionStrings:Redis", "localhost:1");
             builder.ConfigureTestServices(services =>

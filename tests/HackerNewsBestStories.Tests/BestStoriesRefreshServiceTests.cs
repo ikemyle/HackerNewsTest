@@ -105,7 +105,7 @@ public class BestStoriesRefreshServiceTests
     }
 
     private static BestStoriesRefreshService CreateService(BestStoriesCache cache, TimeProvider time) =>
-        new(cache, Options.Create(new HackerNewsOptions()), time, NullLogger<BestStoriesRefreshService>.Instance);
+        new(cache, Options.Create(TestSettings.HackerNews()), time, NullLogger<BestStoriesRefreshService>.Instance);
 
     // Reports each timer the service creates, so the test can advance the clock only once
     // the service is actually waiting on it.

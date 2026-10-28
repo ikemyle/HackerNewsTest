@@ -241,7 +241,7 @@ public class BestStoriesCacheTests
         var local = _cache.Current!;
 
         var older = new StorySnapshot([new Story("Old", "https://example.com", "x", local.RefreshedAt, 1, 0)], local.RefreshedAt.AddMinutes(-5));
-        await _sharedCache.SetAsync(BestStoriesCache.SharedCacheKey, JsonSerializer.SerializeToUtf8Bytes(older, JsonSerializerOptions.Web));
+        await _sharedCache.SetAsync(TestSettings.SharedCache().SnapshotKey, JsonSerializer.SerializeToUtf8Bytes(older, JsonSerializerOptions.Web));
 
         await _cache.LoadSharedSnapshotAsync(CancellationToken.None);
 

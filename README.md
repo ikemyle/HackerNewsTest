@@ -71,8 +71,8 @@ before advancing the fake clock, which keeps it deterministic.
 | Status | When |
 | --- | --- |
 | 200 | JSON array of up to `n` stories, highest score first. Header `X-Snapshot-Age` gives the age of the data in whole seconds. |
-| 400 | `n` is missing, not a plain integer, or outside 1–500. Problem Details body with an `errors.n` message. |
-| 503 | No refresh has succeeded yet since the process started. Problem Details body and `Retry-After: 10`. |
+| 400 | `n` is missing, not a plain integer, or outside 1 to `Api:MaxStories` (500). Problem Details body with an `errors.n` message. |
+| 503 | No refresh has succeeded yet since the process started. Problem Details body and `Retry-After` from `Api:ColdStartRetryAfter` (10 s). |
 
 Fewer than `n` stories are returned when fewer eligible stories exist.
 
@@ -104,28 +104,42 @@ Ranking rules:
 
 ## Configuration
 
-Settings live in the `HackerNews` section of `appsettings.json` and can be overridden with environment variables,
-for example `HackerNews__RefreshInterval=00:02:00`.
+All tunable values live in `appsettings.json`; the C# options classes in `Settings.cs` have no defaults of
+their own. Any value can be overridden with an environment variable (`HackerNews__RefreshInterval=00:02:00`) or
+a command-line argument (`--HackerNews:RefreshInterval=00:02:00`).
 
-| Setting | Default | Meaning |
+| Setting | Value in appsettings.json | Meaning |
 | --- | --- | --- |
-| `BaseAddress` | `https://hacker-news.firebaseio.com/v0/` | Upstream API root |
-| `RefreshInterval` | `00:01:00` | Delay between successful refreshes |
-| `FailureRetryDelay` | `00:00:10` | First delay after a failed refresh; doubles per consecutive failure, capped at `RefreshInterval` |
-| `RequestTimeout` | `00:00:10` | Timeout for each upstream HTTP request |
-| `RefreshTimeout` | `00:00:45` | Deadline for a whole refresh (id list plus all items) |
-| `MaxConcurrentRequests` | `8` | Upstream requests in flight at once during a refresh |
+| `Api:MaxStories` | `500` | Largest accepted `n` |
+| `Api:ColdStartRetryAfter` | `00:00:10` | `Retry-After` sent with the 503 before the first snapshot |
+| `HackerNews:BaseAddress` | `https://hacker-news.firebaseio.com/v0/` | Upstream API root |
+| `HackerNews:BestStoriesPath` | `beststories.json` | Best-story id list, relative to `BaseAddress` |
+| `HackerNews:ItemPathTemplate` | `item/{id}.json` | Single item, relative to `BaseAddress` |
+| `HackerNews:DiscussionUrlTemplate` | `https://news.ycombinator.com/item?id={id}` | `uri` for stories without an external url |
+| `HackerNews:RefreshInterval` | `00:01:00` | Delay between successful refreshes |
+| `HackerNews:FailureRetryDelay` | `00:00:10` | First delay after a failed refresh; doubles per consecutive failure, capped at `RefreshInterval` |
+| `HackerNews:RequestTimeout` | `00:00:10` | Timeout for each upstream HTTP request |
+| `HackerNews:RefreshTimeout` | `00:00:45` | Deadline for a whole refresh (id list plus all items) |
+| `HackerNews:MaxConcurrentRequests` | `8` | Upstream requests in flight at once during a refresh |
+| `Cache:Provider` | `Memory` | `Memory` or `Redis`, see below |
+| `Cache:SnapshotKey` | `hacker-news:best-stories` | Key the snapshot is stored under in the shared cache |
+| `ConnectionStrings:Redis` | `localhost:6379` | Used only when `Cache:Provider` is `Redis` |
 
-Invalid values (zero or negative) stop the app at startup.
+The settings are validated with data annotations when the app starts. A missing or invalid value (an empty path,
+a template without `{id}`, a zero interval) stops the app with a message naming the setting, rather than letting
+it run with a fallback.
+
+What stays in code is the API contract and internal names: the route, the `n` parameter, the `X-Snapshot-Age`
+header, the JSON field names, the `story` item type, and the named HttpClient.
 
 ## Cache providers
 
-Every successful refresh is also written as JSON to a shared cache under the key `hacker-news:best-stories`.
+Every successful refresh is also written as JSON to a shared cache under `Cache:SnapshotKey`.
 There are two providers, picked with `Cache:Provider`:
 
 | Provider | Setting | Use |
 | --- | --- | --- |
-| `Memory` (default) | nothing else needed | A single instance. The snapshot stays in-process, as before. |
+| `Memory` (as shipped) | nothing else needed | A single instance. The snapshot stays in-process, as before. |
 | `Redis` | `ConnectionStrings:Redis`, e.g. `localhost:6379` | Several instances that share one snapshot. |
 
 ```bash

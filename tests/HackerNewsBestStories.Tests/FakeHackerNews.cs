@@ -66,7 +66,8 @@ public sealed class FakeHackerNews : HttpMessageHandler
         new(
             new FakeHttpClientFactory(this),
             sharedCache ?? NewSharedCache(),
-            Options.Create(options ?? new HackerNewsOptions()),
+            Options.Create(options ?? TestSettings.HackerNews()),
+            Options.Create(TestSettings.SharedCache()),
             time,
             NullLogger<BestStoriesCache>.Instance);
 
