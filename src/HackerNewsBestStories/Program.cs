@@ -1,6 +1,8 @@
 using System.Globalization;
+using System.Text.Json.Serialization;
 using HackerNewsBestStories;
 using Microsoft.Extensions.Options;
+using Microsoft.OpenApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -47,11 +49,21 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<BestStoriesCache>();
 builder.Services.AddHostedService<BestStoriesRefreshService>();
 builder.Services.AddProblemDetails();
+builder.Services.AddOpenApi();
+// The web defaults also accept numbers written as strings, which shows up in the OpenAPI schema as
+// "integer | string". This API only ever writes numbers, so keep the schema exact.
+builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.NumberHandling = JsonNumberHandling.Strict);
 
 var app = builder.Build();
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+
+if (app.Services.GetRequiredService<IOptions<ApiOptions>>().Value.EnableSwagger)
+{
+    app.MapOpenApi();
+    app.UseSwaggerUI(options => options.SwaggerEndpoint("/openapi/v1.json", "Hacker News best stories"));
+}
 
 app.MapGet("/api/stories/best", (
     string? n,
@@ -90,6 +102,45 @@ app.MapGet("/api/stories/best", (
     var age = timeProvider.GetUtcNow() - snapshot.RefreshedAt;
     response.Headers["X-Snapshot-Age"] = Math.Max(0, (long)age.TotalSeconds).ToString(CultureInfo.InvariantCulture);
     return Results.Ok(snapshot.Stories.Take(count));
+})
+.WithName("GetBestStories")
+.WithSummary("Highest-scoring stories from the current Hacker News best-story list")
+.Produces<Story[]>(StatusCodes.Status200OK)
+.ProducesValidationProblem()
+.ProducesProblem(StatusCodes.Status503ServiceUnavailable)
+.AddOpenApiOperationTransformer((operation, context, _) =>
+{
+    // n is bound as a string so malformed values get our own 400 message; document it as the integer it is.
+    var maxStories = context.ApplicationServices.GetRequiredService<IOptions<ApiOptions>>().Value.MaxStories;
+    if (operation.Parameters?.FirstOrDefault(p => p.Name == "n") is OpenApiParameter n)
+    {
+        n.Required = true;
+        n.Description = $"Number of stories to return, 1 to {maxStories}.";
+        n.Schema = new OpenApiSchema
+        {
+            Type = JsonSchemaType.Integer,
+            Format = "int32",
+            Minimum = "1",
+            Maximum = maxStories.ToString(CultureInfo.InvariantCulture),
+        };
+    }
+
+    AddHeader("200", "X-Snapshot-Age", "Age of the data in whole seconds.");
+    AddHeader("503", "Retry-After", "Seconds to wait before retrying.");
+    return Task.CompletedTask;
+
+    void AddHeader(string status, string name, string description)
+    {
+        if (operation.Responses?.GetValueOrDefault(status) is OpenApiResponse response)
+        {
+            response.Headers ??= new Dictionary<string, IOpenApiHeader>();
+            response.Headers[name] = new OpenApiHeader
+            {
+                Description = description,
+                Schema = new OpenApiSchema { Type = JsonSchemaType.Integer },
+            };
+        }
+    }
 });
 
 app.Run();

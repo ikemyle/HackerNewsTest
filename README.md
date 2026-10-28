@@ -56,6 +56,19 @@ docker run --rm -p 8080:8080 hacker-news-best-stories
 curl -i "http://localhost:8080/api/stories/best?n=5"
 ```
 
+## Swagger
+
+With `Api:EnableSwagger` on (the shipped setting), Swagger UI is at `http://localhost:5131/swagger` and the
+OpenAPI document at `http://localhost:5131/openapi/v1.json`. The document comes from ASP.NET Core's built-in
+OpenAPI generator. Swashbuckle is used only for the UI page.
+
+`n` is bound as a string so that malformed values get the API's own 400 message. The OpenAPI document still
+describes it as a required integer between 1 and `Api:MaxStories`, and lists the `X-Snapshot-Age` and
+`Retry-After` headers.
+
+Set `Api__EnableSwagger=false` to turn both off, for example in a production deployment that shouldn't advertise
+its schema.
+
 ## Tests
 
 ```bash
@@ -112,6 +125,7 @@ a command-line argument (`--HackerNews:RefreshInterval=00:02:00`).
 | --- | --- | --- |
 | `Api:MaxStories` | `500` | Largest accepted `n` |
 | `Api:ColdStartRetryAfter` | `00:00:10` | `Retry-After` sent with the 503 before the first snapshot |
+| `Api:EnableSwagger` | `true` | Serve the OpenAPI document and Swagger UI |
 | `HackerNews:BaseAddress` | `https://hacker-news.firebaseio.com/v0/` | Upstream API root |
 | `HackerNews:BestStoriesPath` | `beststories.json` | Best-story id list, relative to `BaseAddress` |
 | `HackerNews:ItemPathTemplate` | `item/{id}.json` | Single item, relative to `BaseAddress` |

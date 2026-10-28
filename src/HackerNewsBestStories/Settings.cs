@@ -50,6 +50,9 @@ public sealed class ApiOptions
     // Sent as Retry-After on the 503 returned before the first snapshot exists.
     [Range(typeof(TimeSpan), "00:00:01", "01:00:00")]
     public TimeSpan ColdStartRetryAfter { get; set; }
+
+    // Serves the OpenAPI document at /openapi/v1.json and Swagger UI at /swagger.
+    public bool EnableSwagger { get; set; }
 }
 
 public enum CacheProvider
