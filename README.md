@@ -364,3 +364,11 @@ the upstream fetch, or a single worker that refreshes while the API instances on
   and Redis tests against a real server (for example with Testcontainers).
 - **Send the refresh interval to the client.** Have the API return its interval in a header, so the client's
   countdown can't drift from the server's setting.
+- **Database persistence.** Today nothing survives a restart except what Redis holds: the snapshot lives in
+  memory, and the original brief ruled out a database. A small relational store (PostgreSQL or SQL Server through
+  EF Core) would let the app keep each refresh's ranking with its timestamp. Several of the items above need that
+  history: peak rank history, user stats and request logs. It would also let a restarted instance serve the last
+  stored snapshot immediately instead of returning 503. The request path would stay as it is: requests read
+  the in-memory snapshot, and only the background refresh writes to the database, so database latency or an
+  outage never slows the API. Old rankings would be pruned or aggregated on a schedule so the table doesn't grow
+  without bound.
