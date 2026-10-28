@@ -3,13 +3,12 @@
 
 <div class="mb-4">
     <MudStack Row="true" Justify="Justify.SpaceBetween" Class="mb-1">
-        <MudText Typo="Typo.body2">@Label</MudText>
+        <MudText Typo="Typo.body2">Cache refresh in @_remainingSeconds s</MudText>
         <MudText Typo="Typo.body2" Color="Color.Secondary">@_remainingSeconds / @IntervalSeconds</MudText>
     </MudStack>
     <MudProgressLinear Value="_remainingSeconds"
                        Min="0"
                        Max="IntervalSeconds"
-                       Indeterminate="_waiting && AutoReload"
                        Color="Color.Primary"
                        Rounded="true"
                        Size="Size.Medium" />
@@ -18,7 +17,7 @@
 @code {
     private PeriodicTimer? _timer;
     private int _remainingSeconds;
-    private bool _waiting;
+    private bool _stale;
     private DateTimeOffset _nextPoll;
 
     // When the snapshot being shown was published, measured on this client's clock.
@@ -31,21 +30,14 @@
     [Parameter, EditorRequired]
     public int PollSeconds { get; set; }
 
-    // When false the countdown still runs, but reaching zero only tells the user that new data should be available.
+    // When false the countdown still cycles with the server, but never reloads anything.
     [Parameter]
     public bool AutoReload { get; set; }
 
-    // Raised (only with AutoReload) when the countdown reaches zero, and every PollSeconds after that
-    // until SnapshotTime moves forward.
+    // Raised (only with AutoReload) when the countdown passes zero, and every PollSeconds after that
+    // until SnapshotTime moves into the current cycle.
     [Parameter]
     public EventCallback Elapsed { get; set; }
-
-    private string Label => (_waiting, AutoReload) switch
-    {
-        (false, _) => $"Next refresh in {_remainingSeconds} s",
-        (true, true) => "Waiting for the server to refresh…",
-        (true, false) => "New stories should be available. Press Show stories to load them.",
-    };
 
     protected override void OnInitialized()
     {
@@ -64,7 +56,7 @@
             {
                 Update();
                 var now = TimeProvider.GetUtcNow();
-                if (_waiting && AutoReload && now >= _nextPoll)
+                if (_stale && AutoReload && now >= _nextPoll)
                 {
                     _nextPoll = now.AddSeconds(PollSeconds);
                     await Elapsed.InvokeAsync();
@@ -74,19 +66,30 @@
         }
     }
 
-    // The remaining time is recomputed from the snapshot time on every tick rather than decremented,
-    // so a delayed tick (a busy browser tab) doesn't make the countdown drift.
+    // The server refreshes every IntervalSeconds starting from SnapshotTime, so the countdown is the time left
+    // in the current cycle: it runs down to zero and wraps back to the full interval without a reload.
+    // It is recomputed from the clock on every tick so a delayed tick (a busy browser tab) doesn't make it drift.
     private void Update()
     {
-        var remaining = SnapshotTime.AddSeconds(IntervalSeconds) - TimeProvider.GetUtcNow();
-        _remainingSeconds = Math.Clamp((int)Math.Ceiling(remaining.TotalSeconds), 0, IntervalSeconds);
-        var waiting = _remainingSeconds == 0;
-        if (waiting && !_waiting)
+        var interval = TimeSpan.FromSeconds(IntervalSeconds);
+        var elapsed = TimeProvider.GetUtcNow() - SnapshotTime;
+        if (elapsed < TimeSpan.Zero)
         {
-            // Just reached zero: reload on this tick.
+            elapsed = TimeSpan.Zero;
+        }
+
+        var completedCycles = (long)(elapsed / interval);
+        var remaining = interval - (elapsed - interval * completedCycles);
+        _remainingSeconds = (int)Math.Ceiling(remaining.TotalSeconds);
+
+        // Stale means the server should have published a newer snapshot than the one shown.
+        var stale = completedCycles > 0;
+        if (stale && !_stale)
+        {
+            // Just passed zero: with auto reload, reload on this tick.
             _nextPoll = DateTimeOffset.MinValue;
         }
-        _waiting = waiting;
+        _stale = stale;
     }
 
     public void Dispose() => _timer?.Dispose();

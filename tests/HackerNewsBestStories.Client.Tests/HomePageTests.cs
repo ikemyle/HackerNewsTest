@@ -52,7 +52,7 @@ public class HomePageTests : IAsyncLifetime
         page.WaitForAssertion(() => Assert.Equal(2, page.FindAll("tbody tr").Count));
         Assert.Equal("http://api.test/api/stories/best?n=10", Assert.Single(_requests).ToString());
         Assert.Contains("2 stories", page.Markup);
-        Assert.Contains("Next refresh in 18 s", page.Markup);
+        Assert.Contains("Cache refresh in 18 s", page.Markup);
 
         var first = page.FindAll("tbody tr")[0];
         Assert.Equal(["1", "First", "alice", "2019-10-12 13:43", "300", "12"], first.QuerySelectorAll("td").Select(td => td.TextContent.Trim()));
@@ -117,11 +117,11 @@ public class HomePageTests : IAsyncLifetime
     {
         _respond = _ => Stories("[]", snapshotAge: 42);
         var page = _context.Render<Home>();
-        page.WaitForAssertion(() => Assert.Contains("Next refresh in 18 s", page.Markup));
+        page.WaitForAssertion(() => Assert.Contains("Cache refresh in 18 s", page.Markup));
 
         _time.Advance(TimeSpan.FromSeconds(5));
 
-        page.WaitForAssertion(() => Assert.Contains("Next refresh in 13 s", page.Markup));
+        page.WaitForAssertion(() => Assert.Contains("Cache refresh in 13 s", page.Markup));
         Assert.Single(_requests);
     }
 
@@ -131,12 +131,12 @@ public class HomePageTests : IAsyncLifetime
         _respond = _ => Stories("[]", snapshotAge: 42);
         var page = _context.Render<Home>();
         CheckAutoReload(page);
-        page.WaitForAssertion(() => Assert.Contains("Next refresh in 18 s", page.Markup));
+        page.WaitForAssertion(() => Assert.Contains("Cache refresh in 18 s", page.Markup));
 
         _respond = _ => Stories(OneStory("Fresh"), snapshotAge: 0);
         _time.Advance(TimeSpan.FromSeconds(18));
 
-        page.WaitForAssertion(() => Assert.Contains("Next refresh in 60 s", page.Markup));
+        page.WaitForAssertion(() => Assert.Contains("Cache refresh in 60 s", page.Markup));
         Assert.Equal(2, _requests.Count);
         Assert.Contains("Fresh", page.Markup);
     }
@@ -147,18 +147,18 @@ public class HomePageTests : IAsyncLifetime
         _respond = _ => Stories("[]", snapshotAge: 58);
         var page = _context.Render<Home>();
         CheckAutoReload(page);
-        page.WaitForAssertion(() => Assert.Contains("Next refresh in 2 s", page.Markup));
+        page.WaitForAssertion(() => Assert.Contains("Cache refresh in 2 s", page.Markup));
 
         // The server's refresh takes a few seconds, so the first reload still gets the old snapshot.
         _respond = _ => Stories("[]", snapshotAge: 60);
         _time.Advance(TimeSpan.FromSeconds(2));
         page.WaitForAssertion(() => Assert.Equal(2, _requests.Count));
-        page.WaitForAssertion(() => Assert.Contains("Waiting for the server to refresh", page.Markup));
+        page.WaitForAssertion(() => Assert.Contains("Cache refresh in 60 s", page.Markup));
 
         _respond = _ => Stories("[]", snapshotAge: 1);
         _time.Advance(TimeSpan.FromSeconds(5));
 
-        page.WaitForAssertion(() => Assert.Contains("Next refresh in 59 s", page.Markup));
+        page.WaitForAssertion(() => Assert.Contains("Cache refresh in 59 s", page.Markup));
         Assert.Equal(3, _requests.Count);
     }
 
@@ -178,31 +178,36 @@ public class HomePageTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Auto_reload_is_off_by_default_and_reaching_zero_only_shows_a_hint()
+    public void Without_auto_reload_the_countdown_wraps_back_to_the_full_interval_without_calling_the_api()
     {
         _respond = _ => Stories("[]", snapshotAge: 58);
         var page = _context.Render<Home>();
-        page.WaitForAssertion(() => Assert.Contains("Next refresh in 2 s", page.Markup));
+        page.WaitForAssertion(() => Assert.Contains("Cache refresh in 2 s", page.Markup));
         Assert.False(page.Find("input[type=checkbox]").HasAttribute("checked"));
 
-        _time.Advance(TimeSpan.FromSeconds(10));
+        _time.Advance(TimeSpan.FromSeconds(2));
+        page.WaitForAssertion(() => Assert.Contains("Cache refresh in 60 s", page.Markup));
 
-        page.WaitForAssertion(() => Assert.Contains("New stories should be available. Press Show stories to load them.", page.Markup));
+        _time.Advance(TimeSpan.FromSeconds(10));
+        page.WaitForAssertion(() => Assert.Contains("Cache refresh in 50 s", page.Markup));
+
+        _time.Advance(TimeSpan.FromSeconds(60));
+        page.WaitForAssertion(() => Assert.Contains("Cache refresh in 50 s", page.Markup));
         Assert.Single(_requests);
     }
 
     [Fact]
     public void Checking_auto_reload_after_zero_reloads_on_the_next_tick()
     {
-        _respond = _ => Stories("[]", snapshotAge: 60);
+        _respond = _ => Stories("[]", snapshotAge: 65);
         var page = _context.Render<Home>();
-        page.WaitForAssertion(() => Assert.Contains("New stories should be available", page.Markup));
+        page.WaitForAssertion(() => Assert.Contains("Cache refresh in 55 s", page.Markup));
 
         _respond = _ => Stories("[]", snapshotAge: 0);
         CheckAutoReload(page);
         _time.Advance(TimeSpan.FromSeconds(1));
 
-        page.WaitForAssertion(() => Assert.Contains("Next refresh in 60 s", page.Markup));
+        page.WaitForAssertion(() => Assert.Contains("Cache refresh in 60 s", page.Markup));
         Assert.Equal(2, _requests.Count);
     }
 

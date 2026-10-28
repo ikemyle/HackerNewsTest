@@ -78,18 +78,17 @@ dotnet run --project src/HackerNewsBestStories.Client
 Then open `http://localhost:5200`.
 
 Above the table a bar counts down from 60 to 0: the time until the server's next cache refresh, worked out from
-`X-Snapshot-Age`. What happens at zero depends on the "Auto reload" checkbox next to the button, which is off
-by default:
+`X-Snapshot-Age`. At zero it wraps straight back to 60 and keeps cycling with the server, whether or not anything
+is reloaded. The "Auto reload" checkbox next to the button decides what else happens at zero, and is off by
+default:
 
-- Off: the page doesn't call the API again on its own. The bar stays at zero with a hint to press Show stories.
-  Pressing it loads the new snapshot and the bar starts again from 60.
-- On: the page reloads the stories at zero and the bar starts again from 60. The server's refresh takes a few
-  seconds, so the first reload often still gets the old snapshot. In that case the bar shows "Waiting for the
-  server to refresh…" and the page checks again every 5 seconds until a newer snapshot arrives. Ticking the box
-  while the bar is already at zero reloads on the next second.
+- Off: nothing is fetched. The table keeps the stories you loaded until you press Show stories.
+- On: the page reloads the stories as the bar wraps. The server's refresh takes a few seconds, so the first reload
+  often still gets the old snapshot. In that case the page quietly checks again every 5 seconds until a newer
+  snapshot arrives, and the bar keeps counting meanwhile. Ticking the box after the bar has wrapped reloads on the
+  next second.
 
-The
-countdown is recomputed from the snapshot time on every tick, so a slow or backgrounded tab doesn't make it
+The countdown is recomputed from the snapshot time on every tick, so a slow or backgrounded tab doesn't make it
 drift. If a reload fails, the previous stories stay on screen with the error above them.
 
 The client's settings are in `src/HackerNewsBestStories.Client/wwwroot/appsettings.json`:
