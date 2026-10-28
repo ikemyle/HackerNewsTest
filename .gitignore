@@ -13,4 +13,8 @@ publish/
 .DS_Store
 Thumbs.db
 
-.claude/
+# Claude Code: local settings, launch configs, memory files and MCP config, at any depth
+**/.claude/
+**/CLAUDE.md
+**/CLAUDE.local.md
+.mcp.json
