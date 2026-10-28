@@ -50,7 +50,7 @@
         @_rows.Count @(_rows.Count == 1 ? "story" : "stories")
     </MudText>
 
-    <MudTable Items="_rows" Dense="true" Hover="true" Striped="true">
+    <MudTable Items="_rows" @bind-RowsPerPage="_rowsPerPage" Dense="true" Hover="true" Striped="true">
         <HeaderContent>
             <MudTh>#</MudTh>
             <MudTh>Title</MudTh>
@@ -69,6 +69,9 @@
             <MudTd DataLabel="Score" Style="text-align: right">@context.Story.Score</MudTd>
             <MudTd DataLabel="Comments" Style="text-align: right">@context.Story.CommentCount</MudTd>
         </RowTemplate>
+        <PagerContent>
+            <MudTablePager PageSizeOptions="Settings.RowsPerPageOptions" />
+        </PagerContent>
     </MudTable>
 }
 
@@ -76,6 +79,7 @@
     private int _count;
     private bool _loading;
     private bool _autoReload;
+    private int _rowsPerPage;
     private string? _error;
     private DateTimeOffset? _snapshotTime;
     private IReadOnlyList<(int Rank, Story Story)>? _rows;
@@ -84,6 +88,7 @@
     {
         _count = Settings.DefaultStoryCount;
         _autoReload = Settings.AutoReloadByDefault;
+        _rowsPerPage = Settings.DefaultRowsPerPage;
         await LoadAsync();
     }
 

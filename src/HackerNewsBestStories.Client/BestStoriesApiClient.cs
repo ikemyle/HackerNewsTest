@@ -21,6 +21,10 @@ public sealed class ApiSettings
 
     // Initial state of the "Auto reload" checkbox.
     public bool AutoReloadByDefault { get; set; }
+
+    public int DefaultRowsPerPage { get; set; }
+
+    public int[] RowsPerPageOptions { get; set; } = [];
 }
 
 public sealed record Story(string Title, string Uri, string? PostedBy, DateTimeOffset Time, int Score, int CommentCount);

@@ -29,6 +29,8 @@ public class HomePageTests : IAsyncLifetime
             RefreshIntervalSeconds = 60,
             RefreshPollSeconds = 5,
             AutoReloadByDefault = false,
+            DefaultRowsPerPage = 10,
+            RowsPerPageOptions = [10, 25, 50, 100],
         };
         _context.Services.AddSingleton(settings);
         _context.Services.AddSingleton<TimeProvider>(_time);
@@ -210,6 +212,31 @@ public class HomePageTests : IAsyncLifetime
         page.WaitForAssertion(() => Assert.Contains("Cache refresh in 60 s", page.Markup));
         Assert.Equal(2, _requests.Count);
     }
+
+    [Fact]
+    public void Shows_ten_stories_per_page_and_pages_through_the_rest()
+    {
+        _respond = _ => Stories(ManyStories(25), snapshotAge: 0);
+        var page = _context.Render<Home>();
+        page.WaitForAssertion(() => Assert.Equal(10, page.FindAll("tbody tr").Count));
+
+        Assert.Contains("25 stories", page.Markup);
+        Assert.Equal("1", FirstCell(page));
+        Assert.Contains("1-10 of 25", page.Find(".mud-table-pagination").TextContent);
+
+        page.Find(".mud-table-pagination button[aria-label='Next page']").Click();
+
+        page.WaitForAssertion(() => Assert.Equal("11", FirstCell(page)));
+        Assert.Equal(10, page.FindAll("tbody tr").Count);
+        Assert.Contains("Story 11", page.Find("tbody tr").TextContent);
+    }
+
+    private static string FirstCell(IRenderedComponent<Home> page) =>
+        page.Find("tbody tr td").TextContent.Trim();
+
+    private static string ManyStories(int count) =>
+        "[" + string.Join(",", Enumerable.Range(1, count).Select(i =>
+            $$"""{"title":"Story {{i}}","uri":"https://example.com/{{i}}","postedBy":"x","time":"2019-10-12T13:43:01+00:00","score":{{1000 - i}},"commentCount":0}""")) + "]";
 
     private static void CheckAutoReload(IRenderedComponent<Home> page) =>
         page.Find("input[type=checkbox]").Change(true);

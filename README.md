@@ -61,7 +61,8 @@ curl -i "http://localhost:8080/api/stories/best?n=5"
 
 `src/HackerNewsBestStories.Client` is a separate Blazor WebAssembly app built with MudBlazor. It has a number
 input for how many stories to show, loads the default count on start, and lists the stories in a table with rank,
-linked title, author, posting time (UTC), score and comment count. API errors are shown as they come back: the
+linked title, author, posting time (UTC), score and comment count. The table shows 10 rows per page, with a
+pager to move between pages or switch to 25, 50 or 100 rows; ranks stay continuous across pages. API errors are shown as they come back: the
 validation message for a bad `n`, the "not ready yet" message with the retry delay on a 503, and a plain message
 if the API can't be reached.
 
@@ -101,6 +102,8 @@ The client's settings are in `src/HackerNewsBestStories.Client/wwwroot/appsettin
 | `Api:RefreshIntervalSeconds` | `60` | Length of the countdown; should match the API's `HackerNews:RefreshInterval` |
 | `Api:RefreshPollSeconds` | `5` | With auto reload, how often to check again after zero until the server has a newer snapshot |
 | `Api:AutoReloadByDefault` | `false` | Initial state of the "Auto reload" checkbox |
+| `Api:DefaultRowsPerPage` | `10` | Rows per page in the table when the page opens |
+| `Api:RowsPerPageOptions` | `[10, 25, 50, 100]` | Page sizes offered by the pager |
 
 `RefreshIntervalSeconds` is a copy of the server setting. If the two differ the page still shows correct data,
 but the countdown reaches zero at the wrong time and spends the difference polling. Having the API send its
@@ -296,13 +299,68 @@ the upstream fetch, or a single worker that refreshes while the API instances on
 - `postedBy` is passed through as-is and could be `null` if Hacker News ever returned a story without `by`.
 - An empty id list from Hacker News is published as an empty ranking. A `null` response is treated as a failure.
 
-## Known limitations and future improvements
+## Limitations
 
-- The concurrency-limit test proves that 8 requests run together and that the gate does not open below 8. It
-  catches a higher limit only when a ninth request arrives before the gate opens, which depends on thread
-  scheduling. Making that part deterministic would need the test to wait, which I chose not to do.
-- A health check (`/health`) that reports unhealthy when the snapshot is older than some threshold.
-- Fetch only changed items using the `updates.json` endpoint instead of all items on every refresh.
-- `Cache-Control`/`ETag` headers so clients and proxies can avoid repeat downloads within a refresh window.
-- Metrics for refresh duration, failures and snapshot age.
-- A Redis lock so only one instance refreshes at a time, and Redis tests against a real server (for example with Testcontainers). The current tests use the in-memory provider and a fake that fails like an unreachable Redis.
+- **Incoming traffic is not limited.** The limit of 8 concurrent requests applies only to the background refresh
+  calling Hacker News. Requests to `/api/stories/best` have no cap: each one reads the in-memory snapshot without
+  locks or upstream calls, so a 9th or a 9,000th concurrent caller is served the same way. Kestrel's connection
+  limit is left at its default (unlimited), so the real ceiling is CPU and network, mostly the cost of writing
+  JSON for large `n` (500 stories is roughly 100 KB).
+- **No rate limiting.** A single client can send as many requests as it likes. Nothing returns 429.
+- **No HTTP caching headers.** Responses carry no `Cache-Control` or `ETag`, so browsers and proxies ask again
+  even when the snapshot hasn't changed.
+- **Not load-tested.** A test sends 200 requests in parallel and checks that they all get the same response
+  without extra calls to Hacker News. There are no throughput or latency measurements, so I can't give a
+  requests-per-second figure.
+- **One process per snapshot unless Redis is used.** With the `Memory` provider each instance refreshes on its own.
+  More capacity means more instances behind a load balancer, with `Cache:Provider` set to `Redis` to share
+  the snapshot.
+- **No authentication.** The API and the client page are open to anyone who can reach them.
+- **The concurrency-limit test is only partly deterministic.** It proves that 8 requests run together and that
+  the gate doesn't open below 8. It catches a higher limit only when a ninth request arrives before the gate
+  opens, which depends on thread scheduling. Making that part deterministic would need the test to wait, which
+  I chose not to do.
+- **Redis is tested with fakes.** The tests use the in-memory provider and a fake that fails like an unreachable
+  Redis. A real Redis server was checked manually with `docker compose`, not in the test suite.
+
+## Improvements with more time
+
+- **Authentication and authorization.** Require a JWT or API key on the API (`AddAuthentication` plus an
+  authorization policy on the endpoint), and sign users in on the client, for example with OpenID Connect. That
+  also gives rate limiting and stats a real identity to work with instead of an IP address.
+- **Peak rank history.** Record the highest rank each story has reached in the ranking, and the date and time
+  (UTC) it first got there, and show both in the client next to the current rank. Each refresh already produces
+  the full ranking, so this is a comparison against the stored best for each story id. The history needs to
+  outlive a restart and be shared between instances, so it belongs in Redis or a small database rather than the
+  in-memory snapshot. It could be returned as two extra fields (`peakRank`, `peakRankAt`), which adds to the
+  JSON contract without breaking it, or from a separate endpoint if the original response shape must stay
+  exactly as specified.
+- **Comment tree.** Each Hacker News item has a `kids` array with the ids of its direct replies, and every reply
+  has its own `kids`, so a story's discussion forms a tree of any depth. The API could expose it as a
+  hierarchical structure: each node carries the item's id, author, time, text and its own link
+  (`https://news.ycombinator.com/item?id={id}`, from `HackerNews:DiscussionUrlTemplate`), plus its children, and
+  so on for the grandkids. The client would show it as an expandable tree under each story (MudBlazor's
+  `MudTreeView`).
+  This shouldn't be part of the 60-second refresh: popular stories have over a thousand comments
+  (`descendants`), so fetching every tree each minute would multiply the upstream load. Instead it would be a
+  separate endpoint such as `GET /api/stories/{id}/comments?depth=2` that fetches one level at a time when a node is
+  expanded, under the same concurrency limit and request timeouts, with a short cache per item. Deleted and dead
+  comments would be dropped or shown as placeholders, so the tree keeps its shape.
+- **Rate limiting.** ASP.NET Core's built-in rate limiter (`AddRateLimiter`) with a fixed-window or token-bucket
+  policy per user or IP, with limits in `appsettings.json`, returning 429 with `Retry-After`.
+- **User stats.** Record who calls the API, how often and with which `n`, and show it on a small admin page.
+  Even without accounts, per-client request counts would show whether rate limiting is needed.
+- **Logging.** Structured request logging (`UseHttpLogging`, or Serilog) sent to a central store such as Seq,
+  Elasticsearch or Application Insights, with correlation ids so a client error can be traced to the API
+  request. Today the app only writes refresh results and warnings to the console.
+- **Metrics and health checks.** Refresh duration, failure count and snapshot age as metrics (OpenTelemetry),
+  and a `/health` endpoint that reports unhealthy when the snapshot is older than some threshold.
+- **HTTP caching.** `Cache-Control` and `ETag` headers so clients and proxies reuse a response within a refresh
+  window.
+- **Load testing.** A k6 or NBomber run to get real throughput and latency numbers and find the actual ceiling.
+- **Cheaper refreshes.** Use Hacker News's `updates.json` to fetch only changed items instead of every item each
+  minute.
+- **Coordinated refresh across instances.** A Redis lock so only one instance calls Hacker News per interval,
+  and Redis tests against a real server (for example with Testcontainers).
+- **Send the refresh interval to the client.** Have the API return its interval in a header, so the client's
+  countdown can't drift from the server's setting.
